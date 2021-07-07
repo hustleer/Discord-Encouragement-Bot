@@ -15,14 +15,15 @@ A multipurpose bot with rich features as:
 
 Commands:
 - .joke		  	-> displays single joke
- .jokes 10 	  	-> displays 10 jokes
+- .jokes 10 	  	-> displays 10 jokes
+- .inspire 		-> displays inspiring quote
+- .quote			-> displays inspiring quote
+
 
 - .meme 		  	-> displays best random meme
 - .riddle 	  	-> displays best random riddle
 - .puns        	-> displays best random puns
 - .knock knock 	-> displays knock knock joke
-- .inspire 		-> displays inspiring quote
-- .quote			-> displays inspiring quote
 
 - Automatically finds sad words and shows inspirationl messages.
 - .new inspirational_message			->  Adds new inspirationsl message to database
