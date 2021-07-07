@@ -2,6 +2,7 @@
 #Discord_developers_page:  https://discord.com/developers/applications
 
 #replit(bot_hosted_on): https://replit.com/@aries0/Encouragement-Bot#main.py
+
 #uptime_robort(to keep bot up and running): https://uptimerobot.com      #To keep the bot up and running
 
 #discord_bot:  https://discord.com/api/oauth2/authorize?client_id=862191340355715093&permissions=2148002880&scope=bot
@@ -14,6 +15,16 @@ discord -> server_setting, integrations, webhooks, copy webhook url -> url
 github -> repository, settings, webhooks, Add_webhook, url/github, content type->application/json, send me everything, Add webhook
 #------------------------------------------------------------------------#
 '''
+
+
+
+
+
+
+
+#in secrets (Environment Variables) create:
+#Key:TOKEN
+#value: Token_value from discord developers page
 
 import discord
 import os
