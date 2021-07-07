@@ -32,4 +32,4 @@ Commands:
 - .deactivate							-> deactivates the bot
 - .activate								-> activates the bot
 
-#Live Bot:https://discord.com/api/oauth2/authorize?client_id=862191340355715093&permissions=2148002880&scope=bot
+### Live Bot: https://discord.com/api/oauth2/authorize?client_id=862191340355715093&permissions=2148002880&scope=bot
