@@ -11,7 +11,7 @@ import math, random
 from replit import db
 from keep_alive import keep_alive
 
-import asyncpraw
+import asyncpraw, asyncprawcore
 #import commands
 
 import time, asyncio, datetime
@@ -23,6 +23,7 @@ import ffmpeg
 
 from discord import FFmpegPCMAudio
 from dotenv import load_dotenv
+from youtube_search import YoutubeSearch
 
 load_dotenv()
 
@@ -33,6 +34,10 @@ client = discord.Client()
 # Also enable members intent from https://discord.com/developers/ in bot secition
 intents = discord.Intents.default()
 intents.members = True
+
+global playing, stream
+global currently_playing_message
+
 
 def say_hello():
     print(time.ctime())
@@ -117,13 +122,19 @@ reddit = asyncpraw.Reddit(
 )
 
 
-def sub_exists(sub):
+async def sub_exists(subreddit_name):
     exists = True
+    if subreddit_name.startswith(('/r/', 'r/')):
+        subreddit_name = subreddit_name.split('r/')[-1] # -1 gets the last element in the list
     try:
-        reddit.subreddits.search_by_name(sub, exact=True)
-    except NotFound:
-        exists = False
-    return exists
+        subreddit = await reddit.subreddit(subreddit_name, fetch=True)     # by default Async PRAW doesn't make network requests when subreddit is called
+        # do something with subreddit
+    except asyncprawcore.Redirect: 
+        exists=False
+    return(exists)
+    # Reddit will redirect to reddit.com/search if the subreddit doesn't exist
+    #await ctx.send(f"Subreddit {subreddit_name} doesn't exist.")
+
 
 
 def get_nude():
@@ -482,14 +493,19 @@ async def unleash(ctx, subreddit='none'):
     else:
         print(ctx.channel.id)
         #if "unleash" not in db.keys():db['unleash']={}
-        if sub_exists(subreddit):
-            if str(ctx.channel.id) in db['unleash']:
-                db['unleash'][str(ctx.channel.id)].append(str(subreddit))
-            else:
+        if await sub_exists(subreddit):
+            if str(ctx.channel.id) not in db['unleash']:
+                #i.e. channel doesn't exists in database
                 db['unleash'][str(ctx.channel.id)] = []
-                db['unleash'][str(ctx.channel.id)].append(str(subreddit))
-            await ctx.send('unleashing r/{} to {}'.format(
-                subreddit, ctx.channel))
+                #db['unleash'][str(ctx.channel.id)].append(str(subreddit))
+            else:
+                #i.e. channel doesn't exists in database
+                
+                if str(subreddit) not in db['unleash'][str(ctx.channel.id)]:
+                  db['unleash'][str(ctx.channel.id)].append(str(subreddit))
+                  await ctx.send('unleashing r/{} to {}'.format(subreddit, ctx.channel))
+                else:
+                  await ctx.send('r/{} already unleashed to {}'.format(subreddit, ctx.channel))
         else:
             await ctx.send('Sorry! subreddit  r/{} doesnot exists.'.format(
                 subreddit, ctx.channel))
@@ -806,28 +822,6 @@ async def leave(ctx):
     else:
         await ctx.send("The bot is not connected to a voice channel.")
 
-
-youtube_dl.utils.bug_reports_message = lambda: ''
-
-ytdl_format_options = {
-    'format': 'bestaudio/best',
-    'restrictfilenames': True,
-    'noplaylist': True,
-    'nocheckcertificate': True,
-    'ignoreerrors': False,
-    'logtostderr': False,
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'auto',
-    'source_address':
-    '0.0.0.0'  # bind to ipv4 since ipv6 addresses cause issues sometimes
-}
-
-ffmpeg_options = {'options': '-vn'}
-
-ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
-
-
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
@@ -836,22 +830,62 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.url = ""
 
     @classmethod
-    async def from_url(cls, url, *, loop=None, stream=False):
-        loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(
-            None, lambda: ytdl.extract_info(url, download=not stream))
-        if 'entries' in data:
-            # take first item from a playlist
-            data = data['entries'][0]
-        filename = data['title'] if stream else ytdl.prepare_filename(data)
-        return filename
-
+    async def from_url(cls, url, *, loop=None, stream=False, download=False):
+        SAVE_PATH = os.path.join(os.getcwd(), 'downloads')
+        ydl_opts = {
+              'format': 'bestaudio/best',
+              'restrictfilenames': True,
+              'noplaylist': True,
+              'nocheckcertificate': True,
+              'ignoreerrors': False,
+              'logtostderr': False,
+              'quiet': True,
+              'no_warnings': True,
+              'default_search': 'auto',
+              'source_address':
+              '0.0.0.0',  # bind to ipv4 since ipv6 addresses  cause issues sometimes
+              
+              'preferredcodec': [{
+                  'key': 'FFmpegExtractAudio',
+                  'preferredcodec': 'webm',
+                  'preferredquality': '192',
+              }],
+              
+              'outtmpl':SAVE_PATH + '/%(title)s.%(ext)s',
+        }
+        #results = YoutubeSearch(url, max_results=3).to_dict()
+        #vid_url = 'https://www.youtube.com' +  results[0]['url_suffix']
+        #thumbnails = results[0]['thumbnails']
+        #title = results[0]['title']
+        #print('vid_url:{}, thumbnails:{}, title:{}, download:{},url:{}'.format(vid_url, thumbnails, title, download, url))
+        
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            data = ydl.extract_info(f"ytsearch:{url}", download=download)['entries'][0]
+        
+        URL = data['url']
+        thumbnails = data['thumbnails']
+        title = data['title']
+        vid_url = data['webpage_url']
+        
+        print(URL)
+        #Renaming files if downloaded
+        if download==True:
+            files = os.listdir(os.path.join(os.getcwd(), 'downloads'))
+            for file_name in files:
+                if not file_name.endswith('.part'):
+            
+                    # To download files as .mp3
+                    #mp3_format = os.path.join(os.getcwd(), 'downloads', file_name.replace(file_name.split('.')[-1], 'mp3'))
+                    file_name = os.path.join(os.getcwd(), 'downloads', file_name)
+                    os.rename(file_name, title + '.mp3')
+        return(URL,thumbnails, title, vid_url)
 
 @bot.command(name='p',
              brief='To play song note: Please enter: `.join` first',
              help="example: `.play gangnam style`")
-async def play(ctx, url):
-    
+async def play(ctx, *, url):
+    global playing
+    playing = url
     if not ctx.message.author.voice:
         await ctx.send("{} is not connected to a voice channel".format(
             ctx.message.author.name))
@@ -859,41 +893,62 @@ async def play(ctx, url):
         
     else:
         channel = ctx.message.author.voice.channel
-    await channel.connect()
+    try:
+      global player
+      player = await channel.connect()
+    except:
+        pass  
     #joined the channel
     try:
         server = ctx.message.guild
 
         voice_channel = server.voice_client
-        print('voice_channel : ' + str(voice_channel))
+        #print('voice_channel : ' + str(voice_channel))
 
         async with ctx.typing():
-            filename = await YTDLSource.from_url(url, loop=bot.loop)
-            voice_channel.play(discord.FFmpegPCMAudio(source=filename))
-        await ctx.send('**Now playing:** {}'.format(filename))
+            URL, thumbnails, title, vid_url = await YTDLSource.from_url(url, loop=bot.loop)
+            #to stop playing if already playing another
+            player.stop()
+            player.play(discord.FFmpegPCMAudio(URL))
+            
+        print('vid_url:{}, thumbnails:{}, title:{}, URL:{},url:{}'.format(vid_url, thumbnails, title, URL, url))
+        embed=discord.Embed(title=title,
+        #description=stream['longDesc'],
+        color=0x00FFFF,
+        url=vid_url)
+        embed.set_author(name=ctx.message.author)
+        embed.set_thumbnail(url=thumbnails[0]['url'])
+        embed.timestamp = datetime.datetime.utcnow()
+        embed.set_footer(text=f'Added by {ctx.author}')
+        
+        
+        message = await ctx.send(embed=embed)
+        emos=['⏸️','⏹️', '⬇️']#['⏮️', '⏸️', '⏹️', '⏭️', '⬇️']
+        for emoji in emos:
+          await message.add_reaction(emoji)
     except Exception as e:
-        await ctx.send("The bot is not connected to a voice channel.")
         print(e)
+        await ctx.send("The bot is not connected to a voice channel.")
+        
 
-@bot.command(name='d',
-             brief='To download song note: Please enter: `.d song name` ',
-             help="example: `.d gangnam style`")
-async def d(ctx, *, url:str):
-    if not os.getcwd().split('/')[-1]=='downloads':
-        try:
-            os.chdir('downloads')
-        except:
-        #if not os.path.isdir('songs'):
-            os.mkdir('downloads')
-            os.chdir('downloads')
-    print('Try download')
+
+
+
+
+
+
+
+#Downloads videb name/url and returns full filename
+async def download_from_youtube(url):
+    SAVE_PATH = os.path.join(os.getcwd(), 'downloads')
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'preferredcodec': [{
         'key': 'FFmpegExtractAudio',
         'preferredcodec': 'webm',
         'preferredquality': '192',
-        }],
+        }],'outtmpl':SAVE_PATH + '/%(title)s.%(ext)s',
     }
   
     print(' downloading!!! ')
@@ -906,24 +961,43 @@ async def d(ctx, *, url:str):
             video = ydl.extract_info(url, download=False)
 
     #return video
-    print('type_of'+str(type(video)))
+    #print('type_of'+str(type(video)))
     
-    file_name=str(video['title'] + '-' +video['id'] + '.'  +video['formats'][3]['ext'])
+    # Didnot work for filename we extracted did not match with actual file_name
+    '''file_name=str(video['title'] + '-' +video['id'] + '.'  +video['formats'][3]['ext'])
     file_name = file_name.replace('/','_')
-    file_name = os.getcwd()+'/' + file_name
-    
-    # To download files as .mp3
-    mp3_format = file_name.replace(file_name.split('.')[-1], 'mp3')
-    os.rename(file_name, mp3_format)
-    print(file_name)
-    await ctx.send(file=discord.File(mp3_format))
-    #voice = discord.utils.get(client.voice_clients, guild = ctx.guild)
-    #print('Voice: ' + str(voice))
-    os.remove(mp3_format)
-    
-    print(' downloaded!!! ')
+    '''
 
+    files = os.listdir(os.path.join(os.getcwd(), 'downloads'))
+    for file_name in files:
+        if not file_name.endswith('.part'):
+            # To download files as .mp3
+            mp3_format = os.path.join(os.getcwd(), 'downloads', file_name.replace(file_name.split('.')[-1], 'mp3'))
+            file_name = os.path.join(os.getcwd(), 'downloads', file_name)
+  
+            os.rename(file_name, mp3_format)
+            print('file_name: {}'.format(file_name))
+            print('mp3_format: {}'.format(mp3_format))
+            
+            
+            return(mp3_format)
 
+@bot.command(name='d',
+             brief='To download song note: Please enter: `.d song name` ',
+             help="example: `.d gangnam style`")
+async def d(ctx, *, url:str):
+    if not 'downloads' in os.listdir():
+      os.mkdir('downloads')
+    print('Try download')
+    
+    async with ctx.typing():
+          URL, thumbnails, title, vid_url = await YTDLSource.from_url(url, loop=bot.loop, download=True)
+                
+          full_downloaded_file_name = title + '.mp3'
+          
+          await ctx.send(file=discord.File(full_downloaded_file_name))
+          os.remove(full_downloaded_file_name)
+          print(' downloaded!!! ')
 
 
 @bot.command(name='pause', help='This command pauses the song')
@@ -969,30 +1043,320 @@ async def on_voice_state_update(member, before, after):
 
     if len(voice_state.channel.members) == 1:
         await voice_state.disconnect()
-# _______________________________________________________________________
+
+@bot.command(aliases=['donation', 'support'])
+async def donate(ctx, url: str = 'http://stream.radioparadise.com/rock-128'):
+    
+    embed=discord.Embed(title='Support:',
+    description='''Thank you :-) \nesewa/khalti id:\n 9840445934 \n\n Paytreon:\nhttps://www.patreon.com/join/7095305? \n\n Coinbase:\n https://commerce.coinbase.com/checkout/63a4b635-8510-459f-b091-a4f0697993e6
+     
+     \n\n
+     And please vote for me here: https://top.gg/bot/862191340355715093/vote
+     ''',
+    color=0x00FFFF,
+    #url=stream['url']
+    )
+    embed.set_author(
+        name=ctx.message.author,
+        )
+    #embed.set_thumbnail(url=stream['image'])
+    
+    #embed.pfp = author.avatar_url
+    embed.timestamp = datetime.datetime.utcnow()
+    embed.set_footer(text=f'Added by {ctx.author}')
+    
+    message = await ctx.send(embed=embed)
+
+#_______________________________________________________________________
 # ----------------------------- ---------------------------------------
 # _______________________________________________________________________
 # ----------------------------- FM Player -----------------------------
 
 
 
+from discord import FFmpegPCMAudio
+from discord.ext.commands import Bot
+from dotenv import load_dotenv
+
+load_dotenv()
+
+#To be implemented
+global streams
+streams = None
+def start_load_streams():
+    global streams
+    try:
+        streams[0]
+    except:
+        with open('test_fm_list.json','r') as F:    
+            streams = json.load(F)
+
+
+#To get current, next, previous streams
+def get_stream(which=None, current=None):
+    global streams
+    try:
+        streams[0]
+        print('Streams already defined')
+    except:
+        with open('test_fm_list.json','r') as F:    
+            streams = json.load(F)
+        streams = streams['stream_links']
+        print(streams)
+        
+        #global streams_url
+        
+        #streams=streams['stream_links']
+        #streams_url = [i['url'] for i in streams]
+        
+    finally:
+        if current==None:
+            current={
+                "name": "Radio Nepal",
+                "city" : "kathmandu",
+                "url": "https://radionepal.news/live/audio/mp3",
+                "image": "https://radionepal.gov.np/wp-content/themes/rdnp/images/logo-en.png",
+                "desc": "am/sw/fm radio",
+                "longDesc": "Radio Nepal, oldest radio of nepal."
+            }
+        if which=='next':
+            nxt = streams.index(current) + 1
+            
+            # Triggred to get next station at the end of stations list 
+            if nxt >= len(streams):
+                nxt -= len(streams)
+            
+            current = streams[nxt]
+            print(nxt)
+        
+        elif which=='prev':
+            prev = streams.index(current) - 1
+            print(prev)
+            
+            # Triggred to get previous station at the beginning of stations list
+            if prev < 0:
+                prev += len(streams)
+            
+            
+            print('current:{}, prev:{}'.format(streams.index(current),prev))
+            
+            current = streams[prev]
+            
+        return(current)
+
+
 @bot.command(aliases=['fm', 'radio'])
 async def playfm(ctx, url: str = 'http://stream.radioparadise.com/rock-128'):
+    global playing
+    playing = "fm"
+    global currently_playing_message
+    
+    global stream
+    stream = get_stream()
     #url = "https://radio-streaming-serv-1.hamropatro.com/radio/8050/radio.mp3"
-    url = 'https://radionepal.news/live/audio/mp3'
+    #url = 'https://radionepal.news/live/audio/mp3'
+    #global channel
     channel = ctx.message.author.voice.channel
     global player
     try:
         player = await channel.connect()
     except:
         pass
-    player.play(FFmpegPCMAudio(url))
-    message = await ctx.send("Playing radio nepal. \n Sorry Buttons functionalities will be added soon!")
-    emojis = [':track_previous:', ':pause_button:', ':stop_button:', ':track_next:', ':record_button:', ':arrow_down:']
-    emos=['⏮️', '⏸️', '⏹️', '⏺️', '⏭️', '⬇️']
-    for emoji in emos:
-        await message.add_reaction(emoji)
+    player.play(FFmpegPCMAudio(stream['url']))
+    #global message
+    
+    embed=discord.Embed(title=stream['name'],
+    description=stream['longDesc'],
+    color=0x00FFFF,
+    url=stream['url'])
+    embed.set_author(
+        name=ctx.message.author,
+        )
+        #icon_url=ctx.message.author.avatar_url)
+    embed.set_thumbnail(url=stream['image'])
+    
+    #embed.pfp = author.avatar_url
+    embed.timestamp = datetime.datetime.utcnow()
+    embed.set_footer(text=f'Added by {ctx.author}')
+    
 
+    currently_playing_message = await ctx.send(embed=embed)
+    #emojis = [':track_previous:', ':pause_button:', ':stop_button:', ':track_next:', ':record_button:', ':arrow_down:']
+    emos=['⏮️', '⏸️', '⏹️', '⏭️']#, '⏺️', '⬇️']
+    for emoji in emos:
+        await currently_playing_message.add_reaction(emoji)
+
+def get_embed(reaction, user, stream):
+  embed=discord.Embed(title=stream['name'],
+    #description=stream['longDesc'],
+    color=0x00FFFF,
+    url=stream['url'])
+  embed.set_author(
+        name=user,
+        )
+        #icon_url=ctx.message.author.avatar_url)
+  embed.set_thumbnail(url=stream['image'])
+    
+  #embed.pfp = author.avatar_url
+  embed.timestamp = datetime.datetime.utcnow()
+  embed.set_footer(text=f'Added by {user}')
+  return embed
+
+@bot.event
+async def on_reaction_add(reaction, user,a=''):
+    #embed = reaction.embeds[0]
+    #emoji = reaction.emoji
+    #print('hii')
+    #await reaction.message.add_reaction('♥️')
+    global stream
+    if not user.bot:
+        
+        
+        # stop emoji
+        if str(reaction.emoji) == "⏹️":
+            player.stop()
+        
+        # pause emoji
+        elif str(reaction.emoji) == "⏸️":
+            if player.is_playing():
+                player.pause()
+                print('paused')
+            else:
+                player.resume()
+                print('resume')
+        
+        # next emoji
+        elif str(reaction.emoji) == "⏭️":
+            if playing=='fm':
+              
+              print('Playing next, current:{}'.format(stream))
+              stream = get_stream('next',stream)
+              player.stop()
+              player.play(FFmpegPCMAudio(stream['url']))
+              
+              embed=get_embed(reaction, user, stream)
+              await currently_playing_message.edit(embed=embed)
+              
+            #message.send('Hello World')
+            #play_next()
+        
+        # previous emoji
+        elif str(reaction.emoji) == "⏮️":
+            if playing=='fm':
+              
+              print('Playing next, current:{}'.format(stream))
+              stream = get_stream('prev', stream)
+              player.stop()
+              player.play(FFmpegPCMAudio(stream['url']))
+              
+              embed=get_embed(reaction, user, stream)
+              await currently_playing_message.edit(embed=embed)
+            
+            print('Playing next')
+
+        # download emoji
+        elif str(reaction.emoji) == "⬇️":
+          if playing!='fm':  
+            if not 'downloads' in os.listdir():
+                os.mkdir('downloads')
+            print('Try download')
+    
+            async with reaction.message.channel.typing():
+                
+                URL, thumbnails, title, vid_url = await YTDLSource.from_url(playing, loop=bot.loop, download=True)
+                
+                full_downloaded_file_name = title + '.mp3'
+                
+                await reaction.message.channel.send(file=discord.File(full_downloaded_file_name))
+                os.remove(full_downloaded_file_name)
+                print(' downloaded!!! ')
+        else:
+          await reaction.message.add_reaction(reaction)
+    #print('hii')
+    #print(reaction)
+    #print(reaction.message)
+    #print(user)
+
+    #if user.bot:
+    #    return
+    #else:
+    #  previous_messages = await channel.history(limit=1).flatten()
+    #  prev_message.add_reaction('♥️')
+    '''if emoji == "emoji 1":
+        fixed_channel = bot.get_channel(channel_id)
+        await fixed_channel.send(embed=embed)
+    elif emoji == "emoji 2":
+        #do stuff
+    elif emoji == "emoji 3":
+        #do stuff
+    else:
+        return'''
+
+
+@bot.event
+async def on_reaction_remove(reaction, user):
+    print('\nremoved reaction\n')
+    global stream
+    if not user.bot:
+        
+        
+        # stop emoji
+        if str(reaction.emoji) == "⏹️":
+            player.stop()
+        
+        # pause emoji
+        elif str(reaction.emoji) == "⏸️":
+            if player.is_playing():
+                player.pause()
+                print('paused')
+            else:
+                player.resume()
+                print('resume')
+        
+        # next emoji
+        elif str(reaction.emoji) == "⏭️":
+            if playing=='fm':
+              
+              print('Playing next, current:{}'.format(stream))
+              stream = get_stream('next',stream)
+              player.stop()
+              player.play(FFmpegPCMAudio(stream['url']))
+              
+              embed=get_embed(reaction, user, stream)
+              await currently_playing_message.edit(embed=embed)
+              
+            #message.send('Hello World')
+            #play_next()
+        
+        # previous emoji
+        elif str(reaction.emoji) == "⏮️":
+            if playing=='fm':
+              
+              print('Playing next, current:{}'.format(stream))
+              
+              stream = get_stream('prev', stream)
+              player.stop()
+              player.play(FFmpegPCMAudio(stream['url']))
+              
+              embed=get_embed(reaction, user, stream)
+              await currently_playing_message.edit(embed=embed)
+            
+            print('Playing next')
+
+        # download emoji
+        elif str(reaction.emoji) == "⬇️":
+          if playing=='fm':  
+            if not 'downloads' in os.listdir():
+                os.mkdir('downloads')
+            print('Try download')
+    
+            async with reaction.message.channel.typing():
+                full_downloaded_file_name = await download_from_youtube(playing)
+                await reaction.message.channel.send(file=discord.File(full_downloaded_file_name))
+                os.remove(full_downloaded_file_name)
+                print(' downloaded!!! ')
+        else:
+          await reaction.message.add_reaction(reaction)
 # _____________________________________________________
 # ///////////////////// FM Player /////////////////////
 # _____________________________________________________
@@ -1021,7 +1385,7 @@ async def disable_unleashing(ctx):
     help='e.g. `.enable_unleashing`')
 async def enable_unleashing(ctx):
     try:
-        #unleashing.start()
+        unleashing.start()
         await ctx.send('unleashing enabled successfully.')
     except:
         await ctx.send('already enabled.')
@@ -1227,6 +1591,31 @@ def attend_each(usr):
 
 
 #---------------Working------------------------
+
+# For scrapping quotes every 1 min.
+
+@tasks.loop(minutes=1)
+async def start_scrapping():
+    with open('quotes.json','r') as f:
+        saved_quotes = json.load(f)
+    
+    # Got saved quotes
+    saved_quotes = saved_quotes['quotes']
+    
+    new_quotes=requests.get('https://zenquotes.io/api/quotes').json()
+    
+    
+    # To combine new and old quotes
+    n=0
+    for quote in new_quotes:
+        if quote not in saved_quotes:
+            saved_quotes.append(quote)
+            n+=1
+    total_quotes = len(saved_quotes)
+    with open('quotes.json','w') as file:
+        json.dump({'quotes' : saved_quotes}, file, indent = 4)
+    print('Saved {} quotes, total:{}'.format(n,total_quotes))
+
 
 
 @tasks.loop(minutes=30)
@@ -1637,57 +2026,13 @@ async def unleashing():
 
     for channel_id in dict(db['unleash']).keys():
         for each_subreddit in db['unleash'][str(channel_id)]:
-            #if each_subreddit=='jokes':
-            #  await unleash_reddit_jokes(each_subreddit, str(channel_id), 10)
-            #else:
             await unleash_reddit(each_subreddit, str(channel_id), 10)
             print('Unleashed')
 
 
-@bot.event
-async def on_reaction_add(reaction, user):
-    #To mirror any reactions in the channels
-    if not user.bot:
-      await reaction.message.add_reaction(reaction)
-      if str(reaction.emoji) == "⏹️":
-            player.stop()
-      elif str(reaction.emoji) == "⏸️":
-            if player.is_playing():
-                player.pause()
-            else:
-                player.resume()
-    #print('hii')
-    #print(reaction)
-    #print(reaction.message)
-    #print(user)
-
-    #if user.bot:
-    #    return
-    #else:
-    #  previous_messages = await channel.history(limit=1).flatten()
-    #  prev_message.add_reaction('♥️')
-    '''if emoji == "emoji 1":
-        fixed_channel = bot.get_channel(channel_id)
-        await fixed_channel.send(embed=embed)
-    elif emoji == "emoji 2":
-        #do stuff
-    elif emoji == "emoji 3":
-        #do stuff
-    else:
-        return'''
 
 
-@bot.event
-async def on_reaction_remove(reaction, user):
-    print('\nremoved reaction\n')
-    if not user.bot:
-        if str(reaction.emoji) == "⏹️":
-            player.stop()
-        elif str(reaction.emoji) == "⏸️":
-            if player.is_playing():
-                player.pause()
-            else:
-                player.resume()
+
 
 @bot.event
 async def on_ready():
@@ -1701,7 +2046,8 @@ async def on_ready():
     #share_info.start()
 
     #for unleashing from reddit
-    #unleashing.start()
+    unleashing.start()
+    start_scrapping.start()
     game = discord.Game("Chilling out.")
     streaming = discord.Streaming(name='pubg lite',
                                   url="https://www.twitch.tv/caterpileer")
